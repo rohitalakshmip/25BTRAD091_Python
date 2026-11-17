@@ -14,7 +14,7 @@ Eighteen standalone problem-solving task scripts, along with a `25BTRAD091_Probl
 
 ### `25BTRAD091_Experiential Learning Activity/`
 
-The experiential-learning project includes **SceneGraph Production**, a Python web application for screenplay scene analysis and production planning. Its project folder contains the application, core modules, tests, documentation, and static web assets. See its [project README](<25BTRAD091_Experiential Learning Activity/SceneGraph_Production/README.md>) for features and setup instructions.
+The experiential-learning project includes **SceneGraph AI**, a Python web application for screenplay scene analysis and production planning. Its project folder contains the application, core modules, tests, documentation, and static web assets. See its [project README](<25BTRAD091_Experiential Learning Activity/SceneGraph-AI/README.md>) for features and setup instructions.
 
 ## Running the exercises
 
