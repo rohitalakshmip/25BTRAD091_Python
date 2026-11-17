@@ -1,0 +1,19 @@
+# Local configuration and credentials
+**/.env
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Coursework files containing personal data
+/25BTRAD091_Lab Exercises/payroll.csv
+/25BTRAD091_Lab Exercises/students.txt
