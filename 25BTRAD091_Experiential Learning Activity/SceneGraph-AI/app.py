@@ -3,13 +3,19 @@
 FastAPI serves the same frontend locally; GitHub Pages may host docs/ separately.
 """
 from __future__ import annotations
-import csv, hashlib, hmac, io, logging, os, re, secrets, smtplib, ssl, time
+import csv, hashlib, hmac, io, logging, os, re, secrets, smtplib, ssl, subprocess, sys, time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Annotated
+
+if __name__ == '__main__':
+    from start import main as _start_main
+    _start_main()
+    raise SystemExit(0)
+
 from fastapi import FastAPI, Request, Depends, HTTPException, Header, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, JSONResponse
@@ -19,7 +25,7 @@ from models import create_tables, SessionLocal, User, LoginSession, PhoneLogin, 
 from project_service import (create_project, list_projects, enriched, owned_project,
                              modify_scene, modify_cast, modify_settings,
                              add_metadata, add_event, remove_event, schedule, delete_project,
-                             modify_schedule_assignment, reestimate_scene_durations)
+                             modify_schedule_assignment, reestimate_scene_durations, update_shoot_progress)
 from core.experiments import run_experiments
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
@@ -78,7 +84,7 @@ async def headers_and_limits(request: Request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['X-Frame-Options'] = 'DENY'
-    if request.url.path.endswith('/app.js'):
+    if request.url.path.endswith(('/app.js', '/styles.css', '/index.html', '/')):
         response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     elif request.url.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
@@ -806,6 +812,13 @@ def schedule_assignment(payload: dict, db: Session = Depends(get_db), user: User
     return {'state': enriched(db, user.id, pid)}
 
 
+@app.post('/api/shoot-progress')
+def shoot_progress(payload: dict, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    pid = int(payload.get('project_id', 0))
+    cids = [int(x) for x in payload.get('completed_scenes', [])]
+    return {'state': data_or_error(update_shoot_progress, db, user.id, pid, cids)}
+
+
 @app.post('/api/benchmark')
 def benchmark(payload: dict, db: Session = Depends(get_db), user: User = Depends(require_user)):
     pid = int(payload.get('project_id', 0))
@@ -895,3 +908,5 @@ def assets(filename: str):
     if filename not in {'index.html', 'app.js', 'styles.css', 'favicon.svg', 'config.js'}:
         raise HTTPException(status_code=404)
     return FileResponse(FRONT / filename)
+
+

@@ -25,6 +25,12 @@ def default_calendar(scenes,max_scenes_per_day=None):
     estimated_days=max(1,math.ceil(total_slots/DEFAULT_SLOTS_PER_DAY))
     if max_scenes_per_day is not None:
         estimated_days=max(estimated_days,math.ceil(len(scenes)/max_scenes_per_day))
+    if scenes:
+        while estimated_days<MAX_PRODUCTION_DAYS:
+            cfg={'days':estimated_days,'slots_per_day':DEFAULT_SLOTS_PER_DAY,'max_scenes_per_day':max_scenes_per_day,'actor_blocks':{},'location_blocks':{}}
+            if greedy_schedule(scenes,cfg)['status']=='FEASIBLE':
+                break
+            estimated_days+=1
     return {'days':min(MAX_PRODUCTION_DAYS,estimated_days),
             'estimated_days':estimated_days,
             'max_days':MAX_PRODUCTION_DAYS,
@@ -129,6 +135,9 @@ def enriched(db: Session, uid: int, pid: int):
     data['schedule_stale']=bool(optimized and optimized.get('signature')!=signature(data))
     baseline=data['schedules'].get('baseline')
     data['comparison']=compare_schedules(baseline,optimized) if baseline and optimized and not data['schedule_stale'] else None
+    valid_scene_ids={s['scene_id'] for s in data['scenes']}
+    raw_completed=(data['schedules'] or {}).get('completed_scenes',[])
+    data['completed_scenes']=sorted({int(sid) for sid in raw_completed if isinstance(sid,(int,str)) and str(sid).isdigit() and int(sid) in valid_scene_ids})
     return data
 
 
@@ -274,8 +283,19 @@ def schedule(db:Session,uid:int,pid:int,replan:bool=False):
     opt=optimize_schedule(data,data['settings'],prior_schedule=prior)
     sign=signature(data)
     baseline['signature']=sign;opt['signature']=sign
-    p.schedules={'baseline':baseline,'optimized':opt}
+    p.schedules={**(p.schedules or {}),'baseline':baseline,'optimized':opt}
     audited(db,uid,pid,'REPLAN' if replan else 'OPTIMIZE',f'{opt["status"]}; {opt["method"]}')
+    db.commit()
+    return enriched(db,uid,pid)
+
+
+def update_shoot_progress(db:Session,uid:int,pid:int,completed_scene_ids:list[int]):
+    p=owned_project(db,uid,pid)
+    data=project_data(db,uid,pid)
+    valid_ids={s['scene_id'] for s in data['scenes']}
+    cleaned=sorted({int(x) for x in completed_scene_ids if int(x) in valid_ids})
+    p.schedules={**(p.schedules or {}),'completed_scenes':cleaned}
+    audited(db,uid,pid,'SHOOT_PROGRESS_UPDATED',f'{len(cleaned)}/{len(valid_ids)} scenes marked shot')
     db.commit()
     return enriched(db,uid,pid)
 

@@ -121,11 +121,15 @@ def _milp(scenes,cfg,places,prior,began):
             add(xloc+[(yl[(d,loc)],-1)],0,np.inf)
     A=coo_matrix((val,(row,col)),shape=(len(lo),n)).tocsr()
     lower=np.zeros(n);upper=np.ones(n);upper[last_idx]=days;lower[last_idx]=1
-    res=milp(c,integrality=np.ones(n),bounds=Bounds(lower,upper),constraints=LinearConstraint(A,np.array(lo),np.array(hi)),options={'time_limit':float(cfg.get('max_seconds',8)),'mip_rel_gap':0.0})
+    limit=float(cfg.get('max_seconds',8))
+    if num>15000:
+        limit=min(limit,2.0)
+    res=milp(c,integrality=np.ones(n),bounds=Bounds(lower,upper),constraints=LinearConstraint(A,np.array(lo),np.array(hi)),options={'time_limit':limit,'mip_rel_gap':0.0})
     if res.x is not None and all(abs(res.x[i]-round(res.x[i]))<0.001 for i in range(num)):
         selected={(sid):(d,t) for i,(sid,d,t) in enumerate(keys) if res.x[i]>0.5}
         if len(selected)==len(scenes):return _result(scenes,cfg,selected,'OPTIMAL' if res.status==0 else 'FEASIBLE','SciPy HiGHS MILP',began,prior,'Mixed-integer optimization; location-day grouping is a proxy for travel transitions.')
-    return {'status':'INFEASIBLE' if res.status==2 else 'UNKNOWN','method':'SciPy HiGHS MILP','assignments':[],'metrics':{},'elapsed_ms':round((time.perf_counter()-began)*1000,1),'violations':[],'message':str(res.message)[:250]}
+    msg='Could not pack all scenes into the current calendar days because scenes cannot be split across workday boundaries. Increase Days or Hours per Day in Calendar & Availability.' if res.status!=2 else 'No valid assignment exists under the current constraints.'
+    return {'status':'INFEASIBLE' if res.status==2 else 'UNKNOWN','method':'SciPy HiGHS MILP','assignments':[],'metrics':{},'elapsed_ms':round((time.perf_counter()-began)*1000,1),'violations':[],'message':msg}
 
 def optimize_schedule(data,constraints,prior_schedule=None):
     scenes=data['scenes'] if isinstance(data,dict) else data

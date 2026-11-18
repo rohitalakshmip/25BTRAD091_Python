@@ -1,28 +1,35 @@
 SCENEGRAPH AI — PRODUCTION INTELLIGENCE
 ========================================
 
-ONE COMMAND TO RUN LOCALLY (Mac / Linux):
-----------------------------------------
+ONE COMMAND TO RUN LOCALLY ON WINDOWS:
+--------------------------------------
+Open your terminal (PowerShell or Command Prompt) in this folder and run:
+
+    .\run_windows.bat
+
+(Or simply: .\start.bat  or  .\.venv\Scripts\python.exe start.py)
+
+You can also double-click `run_windows.bat` in File Explorer.
+
+This one command will:
+1. Detect your Windows Python & virtual environment (`.venv\Scripts\python.exe`).
+2. Verify all dependencies from `requirements.txt`.
+3. Start the FastAPI server on http://localhost:8000/ with live reload.
+4. Automatically open your browser to the web studio.
+
+To generate a public shareable link on Windows:
+    .\share_public.bat
+
+Press Ctrl+C in your terminal when you want to stop the server.
+
+
+ONE COMMAND TO RUN ON MAC / LINUX:
+----------------------------------
 Open your terminal in this folder and run:
 
     ./start.sh
 
 (Or simply: python3 start.py)
-
-This one command will:
-1. Detect Python and virtual environment.
-2. Verify all dependencies.
-3. Start the FastAPI server on http://localhost:8000/ with live reload.
-4. Automatically open your browser to the web studio.
-
-Press Ctrl+C in your terminal when you want to stop it.
-
-
-ONE COMMAND TO RUN ON WINDOWS:
------------------------------
-Double-click run_windows.bat or run:
-
-    python start.py
 
 
 DEPLOYING TO A REAL WEBSITE (PRODUCTION CLOUD):

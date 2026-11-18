@@ -3,7 +3,7 @@ from pathlib import Path
 # Tests intentionally use a separate SQL database from regular application data.
 TEST_DB=Path(tempfile.gettempdir()) / 'scenegraph_tests_v2.sqlite3'
 if TEST_DB.exists(): TEST_DB.unlink()
-os.environ['DATABASE_URL']='sqlite:///'+str(TEST_DB)
+os.environ['DATABASE_URL']='sqlite:///'+TEST_DB.as_posix()
 from models import create_tables, Base, engine
 create_tables()
 import pytest

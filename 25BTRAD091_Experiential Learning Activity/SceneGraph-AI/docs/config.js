@@ -4,7 +4,7 @@ window.SCENEGRAPH_API_BASE = "";
 
 // Firebase Web Configuration for Google Sign-In
 window.FIREBASE_CONFIG = {
-  apiKey: "YOUR_FIREBASE_API_KEY",
+  apiKey: "AIzaSyBOssG2NgZEd4bck77-DGdyeBIxmSmQ3oA",
   authDomain: "fir-c-e-n-e-g-r-a-p-h.firebaseapp.com",
   projectId: "fir-c-e-n-e-g-r-a-p-h",
   storageBucket: "fir-c-e-n-e-g-r-a-p-h.firebasestorage.app",

@@ -1,9 +1,9 @@
 /* SceneGraph Studio — bespoke, dependency-free frontend. No Streamlit and no frontend build step. */
-const app = { state: null, view: 'overview', bench: null, busy: false, userId: null, user: null, projects: [] };
+const app = { state: null, view: 'overview', bench: null, busy: false, userId: null, user: null, projects: [], trackerFilter: 'all' };
 const $ = q => document.querySelector(q);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, x => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[x]));
 const asNum = v => Number.isFinite(Number(v)) ? Number(v) : 0;
-const labels = { overview: 'OVERVIEW', studio: 'SCRIPT STUDIO', graph: 'KNOWLEDGE GRAPH', planner: 'PRODUCTION PLANNER', continuity: 'CONTINUITY LAB', analytics: 'ANALYTICS LAB' };
+const labels = { overview: 'OVERVIEW', studio: 'SCRIPT STUDIO', planner: 'PRODUCTION PLANNER', tracker: 'SHOOT TRACKER', graph: 'KNOWLEDGE GRAPH', continuity: 'CONTINUITY LAB', analytics: 'ANALYTICS LAB' };
 function toast(msg, isError = false) { const el = document.createElement('div'); el.className = 'toast-item' + (isError ? ' error' : ''); el.textContent = msg; $('#toast').append(el); setTimeout(() => el.remove(), 4200) }
 const loadingOperations = new Map();
 let loadingOperationId = 0;
@@ -558,7 +558,7 @@ function setupProjectDropdown() {
     }
   });
 }
-function showEmptyWorkspace() { app.state = null; app.projects = []; $('#projectSelect').innerHTML = ''; $('#projectSelect').hidden = true; if ($('#projectDropdown')) $('#projectDropdown').hidden = true; $('#deleteProjectBtn').hidden = true; $('#exportBtn').hidden = true; $('#currentCrumb').textContent = 'NEW PROJECT'; $('#content').innerHTML = `${sectionTitle('YOUR NEW PRODUCTION', 'Start with a screenplay.', 'Create your first production by importing a Fountain screenplay.')}<div class="card"><div class="field"><label>PRODUCTION TITLE</label><input class="input" id="scriptTitle" value="Untitled Production"></div><div class="field" style="margin-top:16px"><label>FOUNTAIN SOURCE</label><textarea class="textarea" id="scriptSource" placeholder="INT. STUDIO - DAY&#10;&#10;MIRA&#10;Action!"></textarea></div><div class="footer-actions"><label class="file-label">CHOOSE FILE <input type="file" id="scriptFile" accept=".fountain,.txt,.pdf,text/plain,application/pdf"></label><button class="button button-primary" data-action="import">PARSE & CREATE PRODUCTION ↗</button></div></div>`; }
+function showEmptyWorkspace() { app.state = null; app.projects = []; $('#projectSelect').innerHTML = ''; $('#projectSelect').hidden = true; if ($('#projectDropdown')) $('#projectDropdown').hidden = true; $('#deleteProjectBtn').hidden = true; $('#exportBtn').hidden = true; $('#currentCrumb').textContent = 'NEW PROJECT'; $('#content').innerHTML = `${sectionTitle('YOUR NEW PRODUCTION', 'Start with a screenplay.', 'Create your first production by importing a Fountain screenplay.')}<div class="card layout-stack"><div class="field"><label>PRODUCTION TITLE</label><input class="input" id="scriptTitle" value="Untitled Production"></div><div class="field"><label>FOUNTAIN SOURCE</label><textarea class="textarea" id="scriptSource" placeholder="INT. STUDIO - DAY&#10;&#10;MIRA&#10;Action!"></textarea></div><div class="footer-actions" style="margin-top:6px"><label class="file-label">CHOOSE FILE <input type="file" id="scriptFile" accept=".fountain,.txt,.pdf,text/plain,application/pdf"></label><button class="button button-primary" data-action="import">PARSE & CREATE PRODUCTION ↗</button></div></div>`; }
 async function loadState(pid) { try { const result = await api('/api/projects'); if (!result.projects.length) { showEmptyWorkspace(); return } const savedId = pid ?? (projectStorageKey() ? localStorage.getItem(projectStorageKey()) : null); if (pid && !result.projects.some(project => String(project.id) === String(pid))) throw new Error('That production is no longer available. Refresh your project list.'); const selected = result.projects.find(project => String(project.id) === String(savedId)); app.state = await api('/api/state' + (selected ? '?project_id=' + encodeURIComponent(selected.id) : '')); rememberProject(app.state.id); await loadProjects(result.projects); render() } catch (e) { if (e.message.includes('No productions yet')) { showEmptyWorkspace(); return } toast(e.message, true); $('#content').innerHTML = '<div class="empty">Unable to load this production. Check your API connection or try refreshing.</div>' } }
 async function loadProjects(projects) { const result = projects ? { projects } : await api('/api/projects'); app.projects = result.projects || []; const picker = $('#projectSelect'); if (picker) { picker.innerHTML = app.projects.map(x => `<option value="${x.id}">${esc(x.title)}</option>`).join(''); picker.hidden = true; if (app.state) picker.value = String(app.state.id); } updateProjectDropdown(); }
 function setView(view) { app.view = view; render(); window.scrollTo({ top: 0, behavior: 'smooth' }) }
@@ -566,7 +566,339 @@ function sectionTitle(kicker, title, sub, right = '') { return `<div class="page
 function stat(label, n, meta, color = 'mint') { return `<div class="stat-card"><div class="stat-label">${esc(label)}</div><div class="stat-number text-${color}">${esc(n)}</div><div class="stat-meta">${esc(meta)}</div></div>` }
 function badge(status) { const ok = ['OPTIMAL', 'FEASIBLE', 'HEURISTIC_FEASIBLE'].includes(status); return `<span class="pill ${ok ? '' : 'orange'}">${esc(status || 'NOT RUN')}</span>` }
 function nowResult() { return app.state?.schedules?.optimized }
-function render() { if (!app.state) return; const s = app.state; if ($('#projectSelect')) $('#projectSelect').value = String(s.id); updateProjectDropdown(); $('#deleteProjectBtn').hidden = false; $('#exportBtn').hidden = false; $('#currentCrumb').textContent = labels[app.view]; document.querySelectorAll('.nav-link[data-view]').forEach(el => el.classList.toggle('active', el.dataset.view === app.view)); const advancedViews = ['graph', 'continuity', 'analytics']; $('#moreTools').open = advancedViews.includes(app.view); $('#moreTools').querySelector('summary').classList.toggle('active', advancedViews.includes(app.view)); const routes = { overview: renderOverview, studio: renderStudio, graph: renderGraph, planner: renderPlanner, continuity: renderContinuity, analytics: renderAnalytics }; $('#content').innerHTML = routes[app.view](); if (app.view === 'planner') renderPlannerExtras(); if (app.view === 'graph') requestAnimationFrame(drawGraph) }
+function completedStorageKey(pid) { return `scenegraph_completed_scenes_${pid}` }
+function getCompletedSceneSet(s = app.state) {
+  if (!s || !s.scenes) return new Set();
+  const valid = new Set(s.scenes.map(sc => Number(sc.scene_id)));
+  let raw = Array.isArray(s.completed_scenes) ? s.completed_scenes : null;
+  try {
+    const localRaw = localStorage.getItem(completedStorageKey(s.id));
+    if (localRaw !== null) {
+      const parsed = JSON.parse(localRaw);
+      if (Array.isArray(parsed)) raw = parsed;
+    }
+  } catch { }
+  return new Set((raw || []).map(Number).filter(id => valid.has(id)));
+}
+async function updateCompletedScenes(nextSet, triggerWrapModal = true) {
+  const s = app.state;
+  if (!s || !s.scenes) return;
+  const valid = new Set(s.scenes.map(sc => Number(sc.scene_id)));
+  const arr = [...nextSet].map(Number).filter(id => valid.has(id)).sort((a, b) => a - b);
+  s.completed_scenes = arr;
+  try { localStorage.setItem(completedStorageKey(s.id), JSON.stringify(arr)) } catch { }
+  const scrollY = window.scrollY;
+  render();
+  window.scrollTo({ top: scrollY, behavior: 'instant' });
+  if (triggerWrapModal && s.scenes.length > 0 && arr.length === s.scenes.length) {
+    openWrapCelebrationModal(s);
+  }
+  try {
+    fetch(API_BASE + '/api/shoot-progress', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: s.id, completed_scenes: arr })
+    }).catch(() => {});
+  } catch { }
+}
+function openWrapCelebrationModal(s = app.state, step = 'celebrate') {
+  if (!s) return;
+  const r = nowResult();
+  const prodDays = r?.metrics?.production_days || s.settings?.days || '—';
+  const colors = ['#e5aa6e', '#77dbcb', '#f4d06f', '#8daeee', '#ef988e', '#b7dfa9'];
+  const confettiHtml = Array.from({ length: 30 }, (_, i) => {
+    const left = ((i * 31) % 96) + 2;
+    const delay = ((i * 0.12) % 2.2).toFixed(2);
+    const dur = (2.4 + (i % 5) * 0.4).toFixed(2);
+    const color = colors[i % colors.length];
+    const shape = i % 3 === 0 ? 'confetti-star' : i % 2 === 0 ? 'confetti-circle' : 'confetti-rect';
+    return `<span class="wrap-confetti ${shape}" style="left:${left}%;animation-delay:${delay}s;animation-duration:${dur}s;--c:${color}"></span>`;
+  }).join('');
+
+  const heroGraphic = step === 'theaters' ? `
+    <div class="wrap-clapper-stage">
+      <div class="wrap-clap-burst">★ HOUSEFULL PREMIERE ★</div>
+      <svg class="wrap-clapper-svg" viewBox="0 0 160 104">
+        <rect x="12" y="10" width="136" height="78" rx="9" fill="#182028" stroke="#f4d06f" stroke-width="2.4"/>
+        <rect x="20" y="20" width="120" height="48" rx="5" fill="#111820" stroke="#77dbcb" stroke-width="1.4"/>
+        <circle cx="28" cy="15" r="2" fill="#f4d06f"/><circle cx="48" cy="15" r="2" fill="#f4d06f"/><circle cx="68" cy="15" r="2" fill="#f4d06f"/><circle cx="92" cy="15" r="2" fill="#f4d06f"/><circle cx="112" cy="15" r="2" fill="#f4d06f"/><circle cx="132" cy="15" r="2" fill="#f4d06f"/>
+        <text x="80" y="40" text-anchor="middle" fill="#f4d06f" font-size="8.5" font-weight="800" letter-spacing="1.6">NOW SHOWING</text>
+        <text x="80" y="57" text-anchor="middle" fill="#77dbcb" font-size="11" font-weight="800" letter-spacing="0.8">IN THEATERS 🍿</text>
+        <text x="80" y="80" text-anchor="middle" fill="#e5aa6e" font-size="7.5" font-weight="800" letter-spacing="1.4">★ GRAND RELEASE ★</text>
+      </svg>
+    </div>
+  ` : `
+    <div class="wrap-clapper-stage">
+      <div class="wrap-clap-burst">★ CLAP! IT’S A WRAP ★</div>
+      <svg class="wrap-clapper-svg" viewBox="0 0 160 104">
+        <defs>
+          <clipPath id="clapperBarClip">
+            <rect x="14" y="12" width="132" height="16" rx="4"/>
+          </clipPath>
+        </defs>
+        <g class="clapper-top-bar">
+          <rect x="14" y="12" width="132" height="16" rx="4" fill="#232c35" stroke="#e5aa6e" stroke-width="2"/>
+          <g clip-path="url(#clapperBarClip)">
+            <path d="M24 10 L38 30 M52 10 L66 30 M80 10 L94 30 M108 10 L122 30 M134 10 L148 30" stroke="#e5aa6e" stroke-width="6" stroke-linecap="butt"/>
+          </g>
+          <rect x="14" y="12" width="132" height="16" rx="4" fill="none" stroke="#e5aa6e" stroke-width="2"/>
+        </g>
+        <rect x="14" y="30" width="132" height="64" rx="8" fill="#182028" stroke="#77dbcb" stroke-width="2.2"/>
+        <line x1="14" y1="49" x2="146" y2="49" stroke="#31404e" stroke-width="1.5"/>
+        <text x="80" y="43" text-anchor="middle" fill="#e5aa6e" font-size="7.2" font-weight="800" letter-spacing="1.1">SCENEGRAPH STUDIO</text>
+        <text x="80" y="69" text-anchor="middle" fill="#77dbcb" font-size="11.5" font-weight="800" letter-spacing="0.8">100% FILMED ✓</text>
+        <text x="80" y="85" text-anchor="middle" fill="#b7bec7" font-size="7.2" font-weight="700" letter-spacing="1.1">SHOOTING DONE!</text>
+      </svg>
+    </div>
+  `;
+
+  let stepBody = '';
+  if (step === 'celebrate') {
+    stepBody = `
+      <div class="wrap-clapper-badge">🎉 YAAAY! SHOOTING IS 100% DONE!</div>
+      <h2 class="wrap-headline">“That’s a Wrap on <em>${esc(s.title)}</em>!”</h2>
+      <div class="wrap-mini-pills">
+        <span>✓ <strong>${s.scenes.length}</strong> Scenes Filmed</span>
+        <span>•</span>
+        <span><strong>${prodDays}</strong> Shoot Days</span>
+        <span>•</span>
+        <span><strong>${s.characters.length}</strong> Cast</span>
+        <span>•</span>
+        <span><strong>${s.locations.length}</strong> Sets</span>
+      </div>
+      <div class="wrap-message-box">
+        <p class="wrap-msg-highlight">🎉 <strong>Yaaay, shooting is 100% done</strong> — all <strong>${s.scenes.length} scenes</strong> are officially filmed, which means it’s time for the real plot twist: <strong>Post-Production & Editing!</strong></p>
+      </div>
+      <p class="wrap-prompt-question">How are you feeling about jumping into the Editing Room right now?</p>
+      <div class="wrap-choice-row">
+        <button type="button" class="wrap-choice-btn choice-pumped" data-action="wrap-step" data-step="pumped">
+          <span class="choice-emoji">🔥</span>
+          <div>
+            <strong>Yaaay! Let’s go do the editing!</strong>
+            <small>Bring on the cutting room & sound mix</small>
+          </div>
+        </button>
+        <button type="button" class="wrap-choice-btn choice-tired" data-action="wrap-step" data-step="motivation">
+          <span class="choice-emoji">😮‍💨</span>
+          <div>
+            <strong>Honestly exhausted / overwhelmed…</strong>
+            <small>Shooting took everything out of me</small>
+          </div>
+        </button>
+      </div>
+    `;
+  } else if (step === 'motivation') {
+    stepBody = `
+      <div class="wrap-clapper-badge">💪 DIRECTOR’S PEP TALK • YOU’VE GOT THIS!</div>
+      <h2 class="wrap-headline">“You Can Manage This!”</h2>
+      <div class="wrap-message-box motivation-glow">
+        <p class="wrap-msg-highlight">🌟 Finishing <strong>${s.scenes.length} scenes</strong> on set is a massive achievement, so take a well-deserved breather—if you conquered the shoot, you can easily manage the editing room one cut at a time!</p>
+      </div>
+      <div class="footer-actions" style="justify-content:center;margin-top:16px">
+        <button type="button" class="button button-primary" data-action="wrap-step" data-step="theaters">🍿 NEXT STOP: THEATERS! ➔</button>
+      </div>
+    `;
+  } else if (step === 'pumped') {
+    stepBody = `
+      <div class="wrap-clapper-badge">✂️ NEXT CHAPTER • POST-PRODUCTION & EDITING</div>
+      <h2 class="wrap-headline">“Now the Real Magic Begins!”</h2>
+      <div class="wrap-message-box pumped-glow">
+        <p class="wrap-msg-highlight">✂️ You conquered all <strong>${s.scenes.length} scenes</strong> on set, and now you get to bring your story to life—have the best time shaping the cut, music, and color in the editing room!</p>
+      </div>
+      <div class="footer-actions" style="justify-content:center;margin-top:16px">
+        <button type="button" class="button button-primary" data-action="wrap-step" data-step="theaters">🍿 NEXT STOP: THE BIG SCREEN! ➔</button>
+      </div>
+    `;
+  } else {
+    stepBody = `
+      <div class="wrap-clapper-badge">🍿 GRAND FINALE • BIG SCREEN BOUND</div>
+      <h2 class="wrap-headline">“See <em>${esc(s.title)}</em> in Theaters!”</h2>
+      <div class="wrap-message-box theater-glow">
+        <p class="wrap-msg-highlight">🍿 Wishing the entire cast and crew all the very best for post-production—may every show run <strong>HOUSEFULL</strong>, and <strong>see your movie on the big screen in theaters soon!</strong></p>
+        <div class="wrap-signoff">★ LIGHTS DOWN • CURTAIN UP • SEE YOU AT THE PREMIERE ★</div>
+      </div>
+      <div class="footer-actions" style="justify-content:center;margin-top:16px">
+        ${r && r.assignments?.length && !s.schedule_stale ? '<button type="button" class="button button-mint" data-action="export" data-format="pdf">⇩ WRAP REPORT (PDF)</button>' : ''}
+        <button type="button" class="button button-primary" data-action="close-modal">🎬 BACK TO STUDIO</button>
+      </div>
+    `;
+  }
+
+  openModal('🎬 PRODUCTION WRAP CELEBRATION', `
+    <div class="wrap-celebration-modal">
+      <div class="wrap-confetti-layer" aria-hidden="true">${confettiHtml}</div>
+      <div class="wrap-hero-graphics" aria-hidden="true">
+        <div class="wrap-spotlight spot-left"></div>
+        <div class="wrap-spotlight spot-right"></div>
+        <svg class="wrap-reel-svg reel-left" viewBox="0 0 64 64">
+          <circle cx="32" cy="32" r="28" fill="#171f27" stroke="#e5aa6e" stroke-width="2.5"/><circle cx="32" cy="32" r="7" fill="#e5aa6e"/>
+          <circle cx="32" cy="14" r="5" fill="#26323f" stroke="#77dbcb" stroke-width="1.5"/><circle cx="32" cy="50" r="5" fill="#26323f" stroke="#77dbcb" stroke-width="1.5"/>
+          <circle cx="14" cy="32" r="5" fill="#26323f" stroke="#77dbcb" stroke-width="1.5"/><circle cx="50" cy="32" r="5" fill="#26323f" stroke="#77dbcb" stroke-width="1.5"/>
+        </svg>
+        ${heroGraphic}
+        <svg class="wrap-reel-svg reel-right" viewBox="0 0 64 64">
+          <circle cx="32" cy="32" r="28" fill="#171f27" stroke="#77dbcb" stroke-width="2.5"/><circle cx="32" cy="32" r="7" fill="#77dbcb"/>
+          <circle cx="32" cy="14" r="5" fill="#26323f" stroke="#e5aa6e" stroke-width="1.5"/><circle cx="32" cy="50" r="5" fill="#26323f" stroke="#e5aa6e" stroke-width="1.5"/>
+          <circle cx="14" cy="32" r="5" fill="#26323f" stroke="#e5aa6e" stroke-width="1.5"/><circle cx="50" cy="32" r="5" fill="#26323f" stroke="#e5aa6e" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div class="wrap-step-dots" aria-hidden="true">
+        <span class="wrap-dot ${step === 'celebrate' ? 'active' : ''}"></span>
+        <span class="wrap-dot ${step === 'pumped' || step === 'motivation' ? 'active' : ''}"></span>
+        <span class="wrap-dot ${step === 'theaters' ? 'active' : ''}"></span>
+      </div>
+      ${stepBody}
+    </div>
+  `);
+}
+function renderShootCalendarCard(s, r, fullPage = false) {
+  const completed = getCompletedSceneSet(s);
+  const total = s.scenes.length;
+  const doneCount = completed.size;
+  const pct = total ? Math.round((doneCount / total) * 100) : 0;
+  const allDone = total > 0 && doneCount === total;
+  const sceneMap = Object.fromEntries(s.scenes.map(sc => [sc.scene_id, sc]));
+  const hasAssignments = Boolean(r?.assignments?.length);
+  const filter = app.trackerFilter || 'all';
+
+  let calendarBody = '';
+  if (hasAssignments) {
+    const allDays = [...new Set(r.assignments.map(a => a.day))].sort((a, b) => a - b);
+    const wrappedDays = allDays.filter(day => {
+      const dayItems = r.assignments.filter(a => a.day === day);
+      return dayItems.length > 0 && dayItems.every(a => completed.has(Number(a.scene_id)));
+    }).length;
+
+    const visibleDays = allDays.filter(day => {
+      if (filter === 'all') return true;
+      const dayItems = r.assignments.filter(a => a.day === day);
+      const isDayWrapped = dayItems.length > 0 && dayItems.every(a => completed.has(Number(a.scene_id)));
+      return filter === 'wrapped' ? isDayWrapped : !isDayWrapped;
+    });
+
+    calendarBody = `
+      <div class="shoot-calendar-meta">
+        <div class="graph-filters">
+          <button type="button" class="graph-filter-btn ${filter === 'all' ? 'active' : ''}" data-action="tracker-filter" data-filter="all">ALL DAYS (${allDays.length})</button>
+          <button type="button" class="graph-filter-btn ${filter === 'pending' ? 'active' : ''}" data-action="tracker-filter" data-filter="pending">REMAINING DAYS (${allDays.length - wrappedDays})</button>
+          <button type="button" class="graph-filter-btn ${filter === 'wrapped' ? 'active' : ''}" data-action="tracker-filter" data-filter="wrapped">WRAPPED DAYS (${wrappedDays})</button>
+        </div>
+        <span>🎬 Click any scene or day card to mark it as Done Shooting</span>
+      </div>
+      ${visibleDays.length ? `<div class="shoot-calendar-grid ${fullPage ? 'full-page-grid' : ''}">
+        ${visibleDays.map(day => {
+          const dayItems = r.assignments.filter(a => a.day === day).sort((a, b) => a.start_slot - b.start_slot);
+          const dayDoneCount = dayItems.filter(a => completed.has(Number(a.scene_id))).length;
+          const isDayWrapped = dayItems.length > 0 && dayDoneCount === dayItems.length;
+          const hours = (dayItems.reduce((acc, a) => acc + (a.end_slot - a.start_slot), 0) / 2).toLocaleString();
+          return `
+            <div class="shoot-day-card ${isDayWrapped ? 'day-wrapped' : ''}">
+              <div class="shoot-day-header">
+                <div>
+                  <span class="shoot-day-title">DAY ${day + 1}</span>
+                  <small class="shoot-day-sub">${dayDoneCount}/${dayItems.length} shot · ${hours}h</small>
+                </div>
+                <button type="button" class="small-button ${isDayWrapped ? 'btn-day-wrapped' : ''}" data-action="toggle-day-shot" data-day="${day}" title="${isDayWrapped ? 'Unmark all scenes on Day ' + (day + 1) : 'Mark all scenes on Day ' + (day + 1) + ' as Done Shooting'}">
+                  ${isDayWrapped ? '✓ DAY WRAPPED' : '✓ MARK DAY'}
+                </button>
+              </div>
+              <div class="shoot-day-scenes">
+                ${dayItems.map(item => {
+                  const sc = sceneMap[item.scene_id] || {};
+                  const isShot = completed.has(Number(item.scene_id));
+                  return `
+                    <button type="button" class="shoot-scene-item ${isShot ? 'is-shot' : ''}" data-action="toggle-scene-shot" data-id="${item.scene_id}" title="Click to mark Scene ${sc.script_order} as ${isShot ? 'Pending' : 'Done Shooting'}">
+                      <span class="shoot-check-box">${isShot ? '✓' : ''}</span>
+                      <span class="shoot-scene-code">S${String(sc.script_order || item.scene_id).padStart(2, '0')}</span>
+                      <span class="shoot-scene-loc">${esc(sc.location || sc.heading || 'Scene')}</span>
+                      <span class="shoot-scene-time">${scheduleTimeLabel(item.start_slot)}</span>
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>` : `<div class="empty">No shoot days match the "${esc(filter)}" filter.</div>`}
+    `;
+  } else {
+    const visibleScenes = s.scenes.filter(sc => {
+      if (filter === 'all') return true;
+      const isShot = completed.has(Number(sc.scene_id));
+      return filter === 'wrapped' ? isShot : !isShot;
+    });
+    calendarBody = `
+      <div class="shoot-calendar-meta">
+        <div class="graph-filters">
+          <button type="button" class="graph-filter-btn ${filter === 'all' ? 'active' : ''}" data-action="tracker-filter" data-filter="all">ALL SCENES (${total})</button>
+          <button type="button" class="graph-filter-btn ${filter === 'pending' ? 'active' : ''}" data-action="tracker-filter" data-filter="pending">REMAINING (${total - doneCount})</button>
+          <button type="button" class="graph-filter-btn ${filter === 'wrapped' ? 'active' : ''}" data-action="tracker-filter" data-filter="wrapped">WRAPPED (${doneCount})</button>
+        </div>
+        <span>🎬 Build a schedule in Production Planner to organize this calendar by Shoot Day</span>
+      </div>
+      ${visibleScenes.length ? `<div class="shoot-unscheduled-grid ${fullPage ? 'full-page-grid' : ''}">
+        ${visibleScenes.map(sc => {
+          const isShot = completed.has(Number(sc.scene_id));
+          return `
+            <button type="button" class="shoot-scene-item ${isShot ? 'is-shot' : ''}" data-action="toggle-scene-shot" data-id="${sc.scene_id}">
+              <span class="shoot-check-box">${isShot ? '✓' : ''}</span>
+              <span class="shoot-scene-code">S${String(sc.script_order).padStart(2, '0')}</span>
+              <span class="shoot-scene-loc">${esc(sc.location)}</span>
+              <span class="shoot-scene-time">${formatDuration(sc.duration_slots)}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>` : `<div class="empty">No scenes match the "${esc(filter)}" filter.</div>`}
+    `;
+  }
+
+  return `
+    <div class="card shoot-tracker-card ${allDone ? 'all-scenes-wrapped' : ''}">
+      <div class="card-heading" style="flex-wrap:wrap;gap:12px">
+        <div>
+          <span class="eyebrow" style="margin:0 0 4px 0;display:block">ON-SET PRODUCTION TRACKER & SHOOT CALENDAR</span>
+          <h3 style="margin:0">Shoot completion tracker ${allDone ? '🎬 — IT’S A WRAP!' : ''}</h3>
+        </div>
+        <div class="footer-actions" style="margin-top:0">
+          <span class="pill ${allDone ? '' : 'orange'}">${doneCount} / ${total} SCENES SHOT (${pct}%)</span>
+          <button type="button" class="small-button button-mint" data-action="mark-all-scenes" ${allDone ? 'disabled' : ''}>✓ MARK ALL</button>
+          <button type="button" class="small-button" data-action="mark-none-scenes" ${doneCount === 0 ? 'disabled' : ''}>✕ MARK NONE</button>
+          ${allDone ? '<button type="button" class="small-button button-primary" data-action="show-wrap-modal">🎉 VIEW WRAP MESSAGE</button>' : ''}
+        </div>
+      </div>
+      <div class="shoot-progress-bar-wrap">
+        <div class="shoot-progress-track">
+          <div class="shoot-progress-fill ${allDone ? 'complete' : ''}" style="width:${pct}%"></div>
+        </div>
+      </div>
+      ${calendarBody}
+    </div>
+  `;
+}
+function renderTracker() {
+  const s = app.state, r = nowResult();
+  const completed = getCompletedSceneSet(s);
+  const total = s.scenes.length;
+  const doneCount = completed.size;
+  const pct = total ? Math.round((doneCount / total) * 100) : 0;
+  const allDone = total > 0 && doneCount === total;
+  const hasAssignments = Boolean(r?.assignments?.length);
+  const allDays = hasAssignments ? [...new Set(r.assignments.map(a => a.day))].sort((a, b) => a - b) : [];
+  const wrappedDays = allDays.filter(day => {
+    const dayItems = r.assignments.filter(a => a.day === day);
+    return dayItems.length > 0 && dayItems.every(a => completed.has(Number(a.scene_id)));
+  }).length;
+  const statusLabel = allDone ? 'WRAPPED 🎬' : doneCount > 0 ? `${pct}% SHOT` : 'PRE-SHOOT';
+  return `${sectionTitle('04 / ON-SET TRACKER', 'Shoot completion calendar.', 'Check off scenes and shoot days as filming progresses on set. Mark all scenes done to wrap principal photography.', `<span class="tag ${allDone ? '' : 'amber'}">${doneCount} / ${total} SCENES WRAPPED</span>`)}
+    <div class="stat-grid">
+      ${stat('SCENES WRAPPED', `${doneCount} / ${total}`, `${pct}% filming completed`, 'mint')}
+      ${stat('REMAINING SCENES', String(total - doneCount), 'Left to shoot on set', 'amber')}
+      ${stat('DAYS WRAPPED', hasAssignments ? `${wrappedDays} / ${allDays.length}` : '—', hasAssignments ? 'Full shoot days completed' : 'Build schedule in Planner', 'blue')}
+      ${stat('SHOOT STATUS', statusLabel, allDone ? 'Ready for editing & post' : 'Principal photography', allDone ? 'mint' : 'amber')}
+    </div>
+    ${renderShootCalendarCard(s, r, true)}`;
+}
+function render() { if (!app.state) return; const s = app.state; if ($('#projectSelect')) $('#projectSelect').value = String(s.id); updateProjectDropdown(); $('#deleteProjectBtn').hidden = false; $('#exportBtn').hidden = false; $('#currentCrumb').textContent = labels[app.view]; document.querySelectorAll('.nav-link[data-view]').forEach(el => el.classList.toggle('active', el.dataset.view === app.view)); const advancedViews = ['graph', 'continuity', 'analytics']; $('#moreTools').open = advancedViews.includes(app.view); $('#moreTools').querySelector('summary').classList.toggle('active', advancedViews.includes(app.view)); const routes = { overview: renderOverview, studio: renderStudio, planner: renderPlanner, tracker: renderTracker, graph: renderGraph, continuity: renderContinuity, analytics: renderAnalytics }; $('#content').innerHTML = routes[app.view](); if (app.view === 'planner') renderPlannerExtras(); if (app.view === 'graph') requestAnimationFrame(drawGraph) }
 function scheduleTimeLabel(slot) { const minutes = 8 * 60 + slot * 30; return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}` }
 function formatDuration(slots) { const minutes = slots * 30; if (minutes < 60) return `${minutes} min`; const hours = Math.floor(minutes / 60), remainder = minutes % 60; return remainder ? `${hours}h ${remainder}m` : `${hours}h` }
 function renderPreflight(s) {
@@ -633,19 +965,22 @@ function renderOverview() {
 }
 function renderStudio() {
   const s = app.state;
+  const completed = getCompletedSceneSet(s);
+  const doneCount = completed.size;
+  const allDone = s.scenes.length > 0 && doneCount === s.scenes.length;
   return `${sectionTitle('01 / DATA ENGINEERING', 'Script studio.', 'Upload a screenplay, review scene estimates, and correct the details.', `<span class="tag">${s.scenes.length} SCENES</span>`)}
     <div class="layout-stack">
       <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
         <div>
           <span class="eyebrow" style="margin:0 0 4px 0">ACTIVE PRODUCTION</span>
           <h3 style="margin:0 0 6px 0">${esc(s.title)}</h3>
-          <p class="muted" style="margin:0">${s.scenes.length} scenes parsed · ${s.characters.length} cast members · ${s.locations.length} locations</p>
+          <p class="muted" style="margin:0">${s.scenes.length} scenes parsed · ${s.characters.length} cast members · ${s.locations.length} locations · <strong>${doneCount}/${s.scenes.length} scenes wrapped</strong></p>
         </div>
-        <div class="footer-actions">
+        <div class="footer-actions" style="margin-top:0">
           <button class="button button-primary" data-action="navigate" data-target="planner">OPEN SHOOTING SCHEDULE ↗</button>
         </div>
       </div>
-      <div class="card"><div class="card-heading"><h3>Scenes</h3><div class="footer-actions"><span class="tag">${s.scenes.length}</span><button class="small-button" data-action="estimate-durations">RE-ESTIMATE TIMES</button></div></div><p class="muted">Shoot times are rough estimates from screenplay cues. Review and adjust them before scheduling.</p><div class="table-wrap"><table class="data-table"><thead><tr><th>SCENE</th><th>LOCATION</th><th>TIME</th><th>CAST</th><th>EST. SHOOT TIME</th><th></th></tr></thead><tbody>${s.scenes.map(x => `<tr><td><span class="scene-index">${x.script_order.toString().padStart(2, '0')}</span></td><td><strong>${esc(x.location)}</strong><br><small class="muted">${esc(x.heading)}</small></td><td>${esc(x.time_of_day)}</td><td><div class="cast-chips">${x.speakers.length ? x.speakers.map(n => `<span class="cast-chip">${esc(n)}</span>`).join('') : '<span class="muted">Not verified</span>'}</div></td><td>${formatDuration(x.duration_slots)}</td><td><button class="small-button" data-action="edit-scene" data-id="${x.scene_id}">EDIT</button></td></tr>`).join('')}</tbody></table></div></div>
+      <div class="card"><div class="card-heading" style="flex-wrap:wrap"><div style="display:flex;align-items:center;gap:10px"><h3>Scenes</h3><span class="tag ${allDone ? '' : 'amber'}">${doneCount} / ${s.scenes.length} SHOT</span></div><div class="footer-actions" style="margin-top:0"><button class="small-button button-mint" data-action="mark-all-scenes" ${allDone ? 'disabled' : ''}>✓ MARK ALL</button><button class="small-button" data-action="mark-none-scenes" ${doneCount === 0 ? 'disabled' : ''}>✕ MARK NONE</button><button class="small-button" data-action="estimate-durations">RE-ESTIMATE TIMES</button></div></div><p class="muted">Shoot times are rough estimates from screenplay cues. Review and adjust them before scheduling, and mark scenes as they wrap on set.</p><div class="table-wrap"><table class="data-table"><thead><tr><th>STATUS</th><th>SCENE</th><th>LOCATION</th><th>TIME</th><th>CAST</th><th>EST. SHOOT TIME</th><th></th></tr></thead><tbody>${s.scenes.map(x => { const isShot = completed.has(Number(x.scene_id)); return `<tr class="${isShot ? 'row-scene-shot' : ''}"><td><button type="button" class="small-button ${isShot ? 'btn-scene-shot' : ''}" data-action="toggle-scene-shot" data-id="${x.scene_id}">${isShot ? '✓ DONE' : '○ SHOOT'}</button></td><td><span class="scene-index">${x.script_order.toString().padStart(2, '0')}</span></td><td><strong>${esc(x.location)}</strong><br><small class="muted">${esc(x.heading)}</small></td><td>${esc(x.time_of_day)}</td><td><div class="cast-chips">${x.speakers.length ? x.speakers.map(n => `<span class="cast-chip">${esc(n)}</span>`).join('') : '<span class="muted">Not verified</span>'}</div></td><td>${formatDuration(x.duration_slots)}</td><td><button class="small-button" data-action="edit-scene" data-id="${x.scene_id}">EDIT</button></td></tr>` }).join('')}</tbody></table></div></div>
       <div class="card"><div class="card-heading"><h3>Cast and locations</h3></div><div class="form-grid"><form id="actorAddForm" class="inline-form"><input class="input" id="newActorName" placeholder="Add cast member" required><button class="small-button" type="submit">+ ADD CAST</button></form><form id="locationAddForm" class="inline-form"><input class="input" id="newLocationName" placeholder="Add filming location" required><button class="small-button" type="submit">+ ADD LOCATION</button></form></div></div>
       <details class="card planner-details" style="padding:0">
         <summary class="details-summary"><span>Import or replace screenplay</span><small>Upload another .fountain, .txt or .pdf</small></summary>
@@ -750,21 +1085,23 @@ function renderPlanner() {
     ? `<div class="card"><div class="card-heading"><h3>Your schedule</h3>${resultBadge}</div>${r.status === 'HEURISTIC_FEASIBLE' ? '<div class="notice">The optimizer timed out. This constraint-checked draft is not proven optimal. You can adjust scene placements directly below or change the settings and rebuild.</div>' : ''}${hasAssignments ? `<p class="muted">${r.assignments.length} scenes · ${r.metrics.production_days} days</p>${renderTimeline(r.assignments, c.slots_per_day, s.scenes, !s.schedule_stale)}` : `<div class="warning">${esc(r.message)}</div>`}</div>`
     : '<div class="empty">Your schedule will appear here after optimization.</div>';
   const dayOptions = (prefix, items) => `<div class="card"><div class="card-heading"><h3>${prefix} availability</h3><small>CLICK TO BLOCK / UNBLOCK FULL DAY</small></div>${items.length ? `<div style="overflow:auto"><table class="availability"><thead><tr><th>${prefix}</th>${Array.from({ length: c.days }, (_, i) => `<th>DAY ${i + 1}</th>`).join('')}</tr></thead><tbody>${items.map(item => `<tr><td>${esc(item.name)}</td>${Array.from({ length: c.days }, (_, d) => { const key = prefix === 'Actor' ? 'actor_blocks' : 'location_blocks'; const blocked = (c[key][String(item.id)] || []).some(b => b.day === d && b.start === 0 && b.end === c.slots_per_day); return `<td><button class="avail-cell ${blocked ? 'blocked' : ''}" data-action="toggle-availability" data-kind="${key}" data-id="${item.id}" data-day="${d}">${blocked ? 'BLOCKED' : 'OPEN'}</button></td>` }).join('')}</tr>`).join('')}</tbody></table></div>` : '<div class="empty">No participants found.</div>'}</div>`;
-  return `${sectionTitle('03 / PRODUCTION', 'Production schedule.', 'Review your inputs, optimize, then fine-tune scene placements.', r ? resultBadge : '<span class="tag amber">NOT BUILT</span>')}<div class="layout-stack"><details class="card planner-details" id="plannerCalendarDetails"><summary class="details-summary"><span>Calendar & availability</span><small>${c.days} days · ${c.slots_per_day / 2} hours/day${c.max_scenes_per_day ? ` · max ${c.max_scenes_per_day} scenes/day` : ''}</small></summary><div class="planner-details-content"><div class="card"><div class="card-heading"><h3>Production calendar</h3></div><div class="setting-grid"><div class="field"><label>DAYS</label><input type="number" class="input" min="1" max="${s.default_schedule_config.max_days}" id="daysInput" value="${c.days}"></div><div class="field"><label>HOURS PER DAY</label><input type="number" class="input" min="1" max="12" step="0.5" id="hoursInput" value="${c.slots_per_day / 2}"></div><div class="field"><label>MAX SCENES / DAY <small>(OPTIONAL)</small></label><input type="number" class="input" min="1" max="24" step="1" id="maxScenesInput" value="${c.max_scenes_per_day ?? ''}" placeholder="No limit"></div></div><div class="footer-actions" style="margin-top:17px"><button class="button" data-action="save-settings">SAVE</button></div></div><div class="split">${dayOptions('Actor', s.characters)}${dayOptions('Location', s.locations)}</div></div></details><div class="card"><div class="card-heading"><h3>Build your schedule</h3><span class="tag ${r ? (s.schedule_stale ? 'amber' : 'grey') : 'grey'}">${r ? (s.schedule_stale ? 'OUTDATED' : 'CURRENT') : 'NOT BUILT'}</span></div>${recommendation}<div class="footer-actions"><button class="button button-primary" data-action="schedule">${r ? 'REVIEW & REBUILD' : 'REVIEW & BUILD'} ↗</button><button class="button button-mint" title="Replan after a disruption" data-action="replan" ${r ? '' : 'disabled'}>REPLAN</button><button class="button" data-action="export" data-format="csv" ${r && r.assignments?.length && !s.schedule_stale ? '' : 'disabled'}>⇩ EXPORT CSV</button></div><p class="scroll-note" style="margin-top:13px">One crew. No overlapping scenes.</p></div>
+  return `${sectionTitle('03 / PRODUCTION', 'Production schedule.', 'Review your inputs, optimize, then fine-tune scene placements.', r ? resultBadge : '<span class="tag amber">NOT BUILT</span>')}<div class="layout-stack"><details class="card planner-details" id="plannerCalendarDetails"><summary class="details-summary"><span>Calendar & availability</span><small>${c.days} days · ${c.slots_per_day / 2} hours/day${c.max_scenes_per_day ? ` · max ${c.max_scenes_per_day} scenes/day` : ''}</small></summary><div class="planner-details-content"><div class="card"><div class="card-heading"><h3>Production calendar</h3></div><div class="setting-grid"><div class="field"><label>DAYS</label><input type="number" class="input" min="1" max="${s.default_schedule_config.max_days}" id="daysInput" value="${c.days}"></div><div class="field"><label>HOURS PER DAY</label><input type="number" class="input" min="1" max="12" step="0.5" id="hoursInput" value="${c.slots_per_day / 2}"></div><div class="field"><label>MAX SCENES / DAY <small>(OPTIONAL)</small></label><input type="number" class="input" min="1" max="24" step="1" id="maxScenesInput" value="${c.max_scenes_per_day ?? ''}" placeholder="No limit"></div></div><div class="footer-actions" style="margin-top:17px"><button class="button" data-action="save-settings">SAVE</button></div></div><div class="split">${dayOptions('Actor', s.characters)}${dayOptions('Location', s.locations)}</div></div></details><div class="card"><div class="card-heading"><h3>Build your schedule</h3><span class="tag ${r ? (s.schedule_stale ? 'amber' : 'grey') : 'grey'}">${r ? (s.schedule_stale ? 'OUTDATED' : 'CURRENT') : 'NOT BUILT'}</span></div>${recommendation}<div class="footer-actions"><button class="button button-primary" data-action="schedule">${r ? 'REVIEW & REBUILD' : 'REVIEW & BUILD'} ↗</button><button class="button button-mint" title="Replan after a disruption" data-action="replan" ${r ? '' : 'disabled'}>REPLAN</button><button class="button" data-action="navigate" data-target="tracker">☑ OPEN SHOOT TRACKER ↗</button><button class="button" data-action="export" data-format="csv" ${r && r.assignments?.length && !s.schedule_stale ? '' : 'disabled'}>⇩ EXPORT CSV</button></div><p class="scroll-note" style="margin-top:13px">One crew. No overlapping scenes.</p></div>
 ${r && s.schedule_stale ? '<div class="warning">Your schedule is out of date. Rebuild it before use or export.</div>' : ''}${scheduleResult}</div>`
 }
 function renderTimeline(assignments, slots, scenes, editable = false) {
   const map = Object.fromEntries(scenes.map(scene => [scene.scene_id, scene]));
+  const completed = getCompletedSceneSet(app.state);
   const days = [...new Set(assignments.map(item => item.day))].sort((a, b) => a - b);
   return `<div class="timeline">${days.map(day => {
     const today = assignments.filter(item => item.day === day).sort((a, b) => a.start_slot - b.start_slot);
     const hours = (today.reduce((total, item) => total + (item.end_slot - item.start_slot), 0) / 2).toLocaleString();
     const blocks = today.map(item => {
       const scene = map[item.scene_id], position = `left:${100 * item.start_slot / slots}%;width:calc(${100 * (item.end_slot - item.start_slot) / slots}% - 3px)`;
-      const label = `<strong>S${String(scene.script_order).padStart(2, '0')}</strong><small>${esc(scene.location)}</small>`;
+      const isShot = completed.has(Number(item.scene_id));
+      const label = `<strong>${isShot ? '✓ ' : ''}S${String(scene.script_order).padStart(2, '0')}</strong><small>${esc(scene.location)}</small>`;
       return editable
-        ? `<button type="button" class="scene-block" data-action="edit-assignment" data-id="${item.scene_id}" aria-label="Edit scene ${scene.script_order} placement on day ${day + 1}" title="Edit scene ${scene.script_order}: ${esc(scene.heading)}" style="${position};text-align:left">${label}</button>`
-        : `<div class="scene-block" title="${esc(scene.heading)}" style="${position}">${label}</div>`;
+        ? `<button type="button" class="scene-block ${isShot ? 'scene-wrapped' : ''}" data-action="edit-assignment" data-id="${item.scene_id}" aria-label="Edit scene ${scene.script_order} placement on day ${day + 1}" title="Edit scene ${scene.script_order}: ${esc(scene.heading)}${isShot ? ' (WRAPPED)' : ''}" style="${position};text-align:left">${label}</button>`
+        : `<div class="scene-block ${isShot ? 'scene-wrapped' : ''}" title="${esc(scene.heading)}${isShot ? ' (WRAPPED)' : ''}" style="${position}">${label}</div>`;
     }).join('');
     return `<div class="timeline-day"><div class="timeline-heading"><strong>Day ${day + 1}</strong><span>${today.length} scenes · ${hours}h</span></div><div class="timeline-slots" style="grid-template-columns:repeat(${slots},1fr)">${Array.from({ length: slots }, () => '<span class="time-slot"></span>').join('')}${blocks}</div><div class="timeline-ticks"><span>08:00</span><span>${String(8 + Math.floor(slots / 4)).padStart(2, '0')}:00</span><span>${String(8 + Math.floor(slots / 2)).padStart(2, '0')}:00</span></div></div>`;
   }).join('')}</div>`;
@@ -1613,6 +1950,46 @@ async function execute(action, el) {
   if (action === 'navigate') return setView(el.dataset.target);
   if (action === 'account') return openAccountSettings();
   if (action === 'close-modal') return closeModal();
+  if (action === 'show-wrap-modal') return openWrapCelebrationModal(s, 'celebrate');
+  if (action === 'wrap-step') return openWrapCelebrationModal(s, el.dataset.step || 'celebrate');
+  if (action === 'tracker-filter') {
+    app.trackerFilter = el.dataset.filter || 'all';
+    const scrollY = window.scrollY;
+    render();
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
+    return;
+  }
+  if (action === 'toggle-scene-shot') {
+    const sid = Number(el.dataset.id);
+    const set = getCompletedSceneSet(s);
+    const wasAll = set.size === s.scenes.length;
+    if (set.has(sid)) set.delete(sid);
+    else set.add(sid);
+    await updateCompletedScenes(set, !wasAll && set.size === s.scenes.length);
+    return;
+  }
+  if (action === 'toggle-day-shot') {
+    const day = Number(el.dataset.day);
+    const r = nowResult();
+    if (!r?.assignments) return;
+    const daySceneIds = r.assignments.filter(a => a.day === day).map(a => Number(a.scene_id));
+    const set = getCompletedSceneSet(s);
+    const wasAll = set.size === s.scenes.length;
+    const allDayDone = daySceneIds.every(id => set.has(id));
+    daySceneIds.forEach(id => { if (allDayDone) set.delete(id); else set.add(id); });
+    await updateCompletedScenes(set, !wasAll && set.size === s.scenes.length);
+    return;
+  }
+  if (action === 'mark-all-scenes') {
+    const set = new Set(s.scenes.map(sc => Number(sc.scene_id)));
+    await updateCompletedScenes(set, true);
+    return;
+  }
+  if (action === 'mark-none-scenes') {
+    await updateCompletedScenes(new Set(), false);
+    toast('All scenes unmarked and reset to in-progress.');
+    return;
+  }
   if (action === 'edit-scene') return editScene(Number(el.dataset.id));
   if (action === 'edit-assignment') return editAssignment(Number(el.dataset.id));
   if (action === 'review-scenes') { closeModal(); setView('studio'); return }

@@ -4,10 +4,13 @@ Works with SQLite for local development and PostgreSQL for deployment.
 """
 from __future__ import annotations
 import os
+from pathlib import Path
 from datetime import datetime, timezone
 from sqlalchemy import (create_engine, event, Integer, String, Text, ForeignKey, DateTime,
                         UniqueConstraint, JSON, CheckConstraint)
 from sqlalchemy.orm import DeclarativeBase, mapped_column, relationship, sessionmaker
+
+ROOT_DIR = Path(__file__).resolve().parent
 
 
 def utcnow():
@@ -15,7 +18,8 @@ def utcnow():
 
 
 def database_url():
-    url = os.getenv('DATABASE_URL', 'sqlite:///./scenegraph.db')
+    default_db = f"sqlite:///{(ROOT_DIR / 'scenegraph.db').as_posix()}"
+    url = os.getenv('DATABASE_URL', default_db)
     if url.startswith('postgres://'):
         url = 'postgresql://' + url[len('postgres://'):]
     if url.startswith('postgresql://'):
